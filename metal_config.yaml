@@ -1,0 +1,122 @@
+# pyKVFinder MetalFinder - Unified Metal Configuration
+# =====================================================
+# This is the single configuration file for all metal binding site identification.
+# Users can modify the default section or use metal-specific presets below.
+#
+# HSAB (Hard-Soft Acid-Base) classifications are ALWAYS computed.
+# The hsab_filter section controls whether to filter by these properties.
+#
+# References:
+#   - Pearson, R.G. (1963). Hard and Soft Acids and Bases. JACS 85:3533-3539
+#   - Dudev & Lim (2008). Metal binding affinity and selectivity. Annu Rev Biophys 37:97-116
+#
+# To use a specific metal preset, uncomment the corresponding section at the bottom
+# of this file and comment out the default section, or create a copy of this file
+# and modify the section you need.
+
+# ==================================================
+# DEFAULT SETTINGS (Generic Metal Detection)
+# ==================================================
+# These are conservative defaults that work for most metals.
+# See metal-specific presets below for optimized parameters.
+
+default:
+  # ==================================================
+  # PYKVFINDER CAVITY DETECTION PARAMETERS
+  # ==================================================
+  kvfinder:
+    step: 0.6                  # Grid spacing (Å)
+    probe_in: 1.4              # Internal probe radius (Å)
+    probe_out: 4.0             # External probe radius (Å)
+    removal_distance: 2.4      # Surface removal distance (Å)
+    volume_cutoff: 5.0         # Minimum cavity volume (Å³)
+  
+  # ==================================================
+  # PROBE EXTRACTION OPTIONS
+  # ==================================================
+  io:
+    # Which KVFinder outputs to use as initial probe positions
+    include_cavities: true              # Include cavity interior points
+    include_cavity_surface: false       # Include cavity surface points
+    include_protein_surface: false      # Include protein surface points
+    protein_surface_max_distance: 5.0   # Max distance for protein surface (Å)
+    
+    # Process specific cavities only (null = all cavities)
+    # Example: [2, 3, 5] to process only cavities KAA, KAB, KAD
+    cavity_ids: null
+
+  # ==================================================
+  # DISTANCE FILTER
+  # ==================================================
+  # First filter: Remove probes based on distance to nearest protein atom
+  # Eliminates ~70-90% of initial probes
+  distance_filter:
+    min_coordination_distance: 1.8  # Minimum metal-ligand distance (Å)
+    max_coordination_distance: 3.5  # Maximum metal-ligand distance (Å)
+    
+    # Which atom types to consider (others ignored)
+    allowed_donor_atoms: ["N", "O", "S"]  # Common metal-coordinating atoms
+
+  # ==================================================
+  # COORDINATION FILTER
+  # ==================================================
+  # Second filter: Evaluate coordination sphere
+  # Eliminates ~80-95% of distance-filtered probes
+  coordination_filter:
+    coordination_radius: 3.8      # Sphere radius for counting donors (Å)
+    min_coordination_number: 2       # Minimum coordinating atoms
+    max_coordination_number: 100       # Maximum coordinating atoms
+    
+    # Occlusion checking (geometric line-of-sight test)
+    check_occlusion: true            # Enable occlusion testing
+    occlusion_cone_angle: 30.9       # Cone angle for occlusion (degrees)
+    occlusion_vdw_scale: 1.0         # VdW radius scaling factor
+
+  # ==================================================
+  # HSAB HARDNESS FILTER
+  # ==================================================
+  # Third filter: Filter by HSAB (Hard-Soft Acid-Base) properties
+  # Set values to null to disable that specific filter
+  #
+  # HSAB Classifications (based on atom names):
+  #   Hard:       OD1/OD2 (Asp), OE1/OE2 (Glu), OG (Ser), OG1 (Thr), OH (Tyr),
+  #               O (backbone, water), NZ (Lys)
+  #   Borderline: ND1/NE2 (His), ND2 (Asn), NE2 (Gln), NE1 (Trp), NH1/NH2 (Arg)
+  #   Soft:       SG (Cys), SD (Met), SE (Sec)
+  #
+  # Examples:
+  #   - Mg²⁺/Ca²⁺ (hard metals): min_hard_donors: 4
+  #   - Zn²⁺/Fe²⁺ (borderline): min_hard_donors: null (no requirement)
+  #   - Cu⁺/Ag⁺ (soft metals): max_soft_donors: 2, max_hard_donors: 2
+  hsab_filter:
+    min_hard_donors: 3            # e.g., 4 for Mg²⁺/Ca²⁺
+    max_soft_donors: null            # e.g., 1 to avoid Cys-rich sites
+    min_borderline_donors: null      # e.g., 2 for His-preference
+
+  # ==================================================
+  # DEDUPLICATION / CLUSTERING
+  # ==================================================
+  # Fourth filter: Remove duplicate sites with similar coordination signatures
+  # Uses hierarchical clustering with Jaccard distance
+  clustering:
+    selection_method: 'centroid'     # How to pick representative: 'centroid', 'first', 'random'
+    distance_threshold: 0.89          # Jaccard distance [0-1]: lower = stricter (0.3 = 70% similarity)
+    min_cluster_size: 2              # Minimum cluster size to keep
+
+  # ==================================================
+  # PERFORMANCE OPTIONS
+  # ==================================================
+  performance:
+    use_kdtree: true                 # Use KDTree for neighbor searches (recommended)
+    use_gpu: false                   # Enable GPU acceleration (requires PyTorch + CUDA)
+    batch_size: 10000                # Batch size for GPU processing
+
+  # ==================================================
+  # OUTPUT OPTIONS
+  # ==================================================
+  output:
+    # File formats to generate
+    export_pdb: true                 # Combined PDB with protein + metal sites
+    
+    # Metal atom properties in PDB files
+    metal_symbol: "M"                # 2-letter atom name for metal probes
