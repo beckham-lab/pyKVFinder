@@ -44,6 +44,10 @@ default:
     # Process specific cavities only (null = all cavities)
     # Example: [2, 3, 5] to process only cavities KAA, KAB, KAD
     cavity_ids: null
+    
+    # Centroid mode: output cavity centroids instead of running filter pipeline
+    # Incompatible with include_protein_surface=true (protein surface has no cavity IDs)
+    use_cavity_centroids: true         # If true, skip filtering and output cavity centroids
 
   # ==================================================
   # DISTANCE FILTER
