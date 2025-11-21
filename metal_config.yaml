@@ -121,6 +121,8 @@ default:
   output:
     # File formats to generate
     export_pdb: true                 # Combined PDB with protein + metal sites
+    export_individual_pdbs: true     # Individual PDB files for each probe with protein
+    individual_pdb_dir: "individual_probes"  # Directory for individual PDB files
     
     # Metal atom properties in PDB files
     metal_symbol: "M"                # 2-letter atom name for metal probes

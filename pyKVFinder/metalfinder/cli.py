@@ -298,6 +298,54 @@ def run_metalfinder(
     if verbose:
         print(f"✓ Saved probes PDB: {probes_only_file}")
     
+    # Save individual PDB files (one per probe with protein)
+    if output_config.get('export_individual_pdbs', False) and len(final_probes) > 0:
+        import os
+        from pathlib import Path
+        
+        # Determine output directory
+        individual_dir = output_config.get('individual_pdb_dir', 'individual_probes')
+        
+        # Extract base name from PDB file
+        base_name = Path(pdb_file).stem
+        
+        # Build filter names list based on what pipeline was used
+        filter_names = []
+        if use_cavity_centroids:
+            # Centroid mode - no filtering applied
+            filter_names.append('cavity_centroids')
+        elif all_results:
+            # Full filtering pipeline - add filter names based on which filters actually ran
+            if len(all_results) >= 1:
+                filter_names.append('distance')
+            if len(all_results) >= 2:
+                filter_names.append('coordination')
+            if len(all_results) >= 3 and hsab_filter is not None:
+                filter_names.append('hsab')
+            if len(all_results) >= 4:
+                filter_names.append('dedup')
+        
+        # Generate individual PDB files
+        created_files = final_probes.to_individual_pdb_files(
+            output_dir=individual_dir,
+            protein_pdb=pdb_file,
+            base_name=base_name,
+            filter_names=filter_names,
+            atom_name=output_config.get('metal_symbol', 'M'),
+            residue_name='PRB'
+        )
+        
+        if verbose:
+            print(f"✓ Saved {len(created_files)} individual PDB files to: {individual_dir}/")
+            if len(created_files) <= 5:
+                for f in created_files:
+                    print(f"  - {os.path.basename(f)}")
+            else:
+                for f in created_files[:3]:
+                    print(f"  - {os.path.basename(f)}")
+                print(f"  ... and {len(created_files) - 3} more")
+
+    
     # Summary
     if verbose:
         print()

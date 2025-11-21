@@ -239,6 +239,103 @@ class ProbeSet:
                 outf.write(line)
             
             outf.write("END\n")
+    
+    def to_individual_pdb_files(self,
+                                output_dir: str,
+                                protein_pdb: str,
+                                base_name: str,
+                                filter_names: List[str] = None,
+                                atom_name: str = 'M',
+                                residue_name: str = 'PRB'):
+        """Export individual PDB files for each probe with protein structure.
+        
+        Creates separate PDB files for each probe, each containing the full protein
+        structure plus a single probe. Useful for MD minimization with metal ions.
+        
+        Parameters
+        ----------
+        output_dir : str
+            Directory to save individual PDB files
+        protein_pdb : str
+            Input protein PDB filename
+        base_name : str
+            Base name for output files (typically original PDB name without extension)
+        filter_names : list of str, optional
+            Filter names to include in filename (e.g., ['distance', 'coordination'])
+        atom_name : str, optional
+            Atom name in PDB (default: 'M' for metal)
+        residue_name : str, optional
+            Residue name in PDB (default: 'PRB' for probe)
+            
+        Returns
+        -------
+        list of str
+            List of created PDB filenames
+            
+        Notes
+        -----
+        Output filename format: <base_name>_<filter1>_<filter2>_probe_<N>.pdb
+        where N is the probe number (1-indexed).
+        """
+        import os
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Build filter string for filename
+        filter_str = ""
+        if filter_names:
+            filter_str = "_" + "_".join(filter_names)
+        
+        created_files = []
+        
+        # Read protein structure once
+        protein_lines = []
+        last_serial = 0
+        with open(protein_pdb, 'r') as inf:
+            for line in inf:
+                if line.startswith(('ATOM', 'HETATM')):
+                    protein_lines.append(line)
+                    # Extract serial number from columns 7-11
+                    try:
+                        serial = int(line[6:11].strip())
+                        last_serial = max(last_serial, serial)
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith('TER'):
+                    protein_lines.append(line)
+                elif line.startswith('END'):
+                    break
+        
+        # Create one PDB file per probe
+        for idx, (pos, source, cav_id) in enumerate(zip(
+            self.positions, self.sources, self.cavity_ids
+        ), start=1):
+            # Generate filename
+            filename = f"{base_name}{filter_str}_probe_{idx:03d}.pdb"
+            filepath = os.path.join(output_dir, filename)
+            
+            with open(filepath, 'w') as outf:
+                # Write protein structure
+                for line in protein_lines:
+                    outf.write(line)
+                
+                # Write single probe
+                serial = last_serial + 1
+                chain = 'B'  # Probe in chain B
+                res_num = 1  # Single residue
+                
+                line = (
+                    f"HETATM{serial:5d}  {atom_name:<3s} {residue_name:3s} {chain}{res_num:4d}    "
+                    f"{pos[0]:8.3f}{pos[1]:8.3f}{pos[2]:8.3f}"
+                    f"  1.00  0.00          {atom_name[0]:>2s}\n"
+                )
+                outf.write(line)
+                outf.write("END\n")
+            
+            created_files.append(filepath)
+        
+        return created_files
 
 
 class ProbeConverter:
