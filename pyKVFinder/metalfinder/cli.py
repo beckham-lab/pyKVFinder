@@ -28,6 +28,44 @@ from pyKVFinder.metalfinder import (
 from pyKVFinder.metalfinder.pdb_parser import parse_pdb
 
 
+def _cif_to_pdb(cif_file: str, output_pdb: str) -> str:
+    """Convert mmCIF file to PDB format for pyKVFinder compatibility.
+    
+    Parameters
+    ----------
+    cif_file : str
+        Path to input mmCIF file
+    output_pdb : str
+        Path to output PDB file
+        
+    Returns
+    -------
+    str
+        Path to created PDB file
+    """
+    from pyKVFinder.metalfinder.pdb_parser import parse_pdb_full
+    
+    # Parse the CIF file with full residue information
+    coords, atom_names, elements, residues, residue_nums, chain_ids, is_backbone = parse_pdb_full(cif_file)
+    
+    # Write as PDB format, preserving original residue numbers and chain IDs
+    with open(output_pdb, 'w') as f:
+        for i, (coord, atom_name, element, residue, res_num, chain) in enumerate(zip(
+            coords, atom_names, elements, residues, residue_nums, chain_ids
+        ), start=1):
+            serial = ((i - 1) % 99999) + 1
+            
+            line = (
+                f"ATOM  {serial:5d}  {atom_name:<3s} {residue:3s} {chain}{res_num:4d}    "
+                f"{coord[0]:8.3f}{coord[1]:8.3f}{coord[2]:8.3f}"
+                f"  1.00  0.00          {element:>2s}\n"
+            )
+            f.write(line)
+        f.write("END\n")
+    
+    return output_pdb
+
+
 def load_config(config_file: str) -> dict:
     """Load YAML configuration file.
     
@@ -62,7 +100,7 @@ def run_metalfinder(
     Parameters
     ----------
     pdb_file : str
-        Path to input PDB file
+        Path to input PDB or mmCIF (.cif) file
     config : dict
         Configuration dictionary from YAML
     output_prefix : str
@@ -83,6 +121,24 @@ def run_metalfinder(
         print("="*70)
         print()
     
+    # Handle CIF files - convert to temporary PDB for pyKVFinder
+    temp_pdb_file = None
+    if pdb_file.endswith('.cif'):
+        if verbose:
+            print("STEP 0: Converting mmCIF to PDB format")
+            print("-"*70)
+        
+        temp_pdb_file = _cif_to_pdb(pdb_file, f"{output_prefix}_temp.pdb")
+        kvfinder_input = temp_pdb_file
+        protein_structure_file = temp_pdb_file  # Use converted PDB for output
+        
+        if verbose:
+            print(f"✓ Converted CIF to temporary PDB: {temp_pdb_file}")
+            print()
+    else:
+        kvfinder_input = pdb_file
+        protein_structure_file = pdb_file  # Use original PDB for output
+    
     # Step 1: Run pyKVFinder cavity detection
     if verbose:
         print("STEP 1: Running pyKVFinder cavity detection")
@@ -92,7 +148,7 @@ def run_metalfinder(
     kvfinder_params = config.get('kvfinder', {})
     
     results = pyKVFinder.run_workflow(
-        pdb_file,
+        kvfinder_input,
         step=kvfinder_params.get('step', 0.6),
         probe_in=kvfinder_params.get('probe_in', 1.4),
         probe_out=kvfinder_params.get('probe_out', 4.0),
@@ -273,7 +329,7 @@ def run_metalfinder(
             verbose=verbose,
             save_intermediates=save_intermediates,
             output_prefix=output_prefix,
-            protein_pdb=pdb_file if save_intermediates else None
+            protein_pdb=protein_structure_file if save_intermediates else None
         )
     
     # Step 5: Save final output
@@ -288,7 +344,7 @@ def run_metalfinder(
     # Save combined PDB (probes + protein)
     if output_config.get('export_pdb', True):
         output_file = f"{output_prefix}_final.pdb"
-        final_probes.to_pdb_with_protein(output_file, pdb_file)
+        final_probes.to_pdb_with_protein(output_file, protein_structure_file)
         if verbose:
             print(f"✓ Saved combined PDB: {output_file}")
     
@@ -328,7 +384,7 @@ def run_metalfinder(
         # Generate individual PDB files
         created_files = final_probes.to_individual_pdb_files(
             output_dir=individual_dir,
-            protein_pdb=pdb_file,
+            protein_pdb=protein_structure_file,
             base_name=base_name,
             filter_names=filter_names,
             atom_name=output_config.get('metal_symbol', 'M'),
@@ -345,6 +401,13 @@ def run_metalfinder(
                     print(f"  - {os.path.basename(f)}")
                 print(f"  ... and {len(created_files) - 3} more")
 
+    # Clean up temporary PDB file if created (after all outputs are saved)
+    if temp_pdb_file:
+        try:
+            import os
+            os.remove(temp_pdb_file)
+        except Exception:
+            pass
     
     # Summary
     if verbose:
@@ -399,7 +462,7 @@ Examples:
     
     parser.add_argument(
         'pdb',
-        help='Input PDB file'
+        help='Input PDB or mmCIF (.cif) file'
     )
     
     parser.add_argument(

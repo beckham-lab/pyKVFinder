@@ -1,0 +1,42 @@
+default:
+  kvfinder:
+    step: 0.6
+    probe_in: 1.4
+    probe_out: 4.0
+    removal_distance: 2.4
+    volume_cutoff: 5.0
+  io:
+    include_cavities: true
+    include_cavity_surface: false
+    include_protein_surface: false
+    protein_surface_max_distance: 5.0
+    cavity_ids: null
+  distance_filter:
+    min_coordination_distance: 1.8
+    max_coordination_distance: 3.5
+    allowed_donor_atoms:
+    - N
+    - O
+    - S
+  coordination_filter:
+    coordination_radius: 3.797806613063592
+    min_coordination_number: 2
+    max_coordination_number: 100
+    check_occlusion: true
+    occlusion_cone_angle: 32.04688221399267
+    occlusion_vdw_scale: 1.0
+  hsab_filter:
+    min_hard_donors: 3
+    max_soft_donors: null
+    min_borderline_donors: null
+  clustering:
+    selection_method: centroid
+    distance_threshold: 0.8572922596990349
+    min_cluster_size: 2
+  performance:
+    use_kdtree: true
+    use_gpu: false
+    batch_size: 10000
+  output:
+    export_pdb: true
+    metal_symbol: M

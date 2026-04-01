@@ -29,7 +29,7 @@ default:
     probe_in: 1.4              # Internal probe radius (Å)
     probe_out: 4.0             # External probe radius (Å)
     removal_distance: 2.4      # Surface removal distance (Å)
-    volume_cutoff: 5.0         # Minimum cavity volume (Å³)
+    volume_cutoff: 5.0       # Minimum cavity volume (Å³)
   
   # ==================================================
   # PROBE EXTRACTION OPTIONS
@@ -37,9 +37,9 @@ default:
   io:
     # Which KVFinder outputs to use as initial probe positions
     include_cavities: true              # Include cavity interior points
-    include_cavity_surface: false       # Include cavity surface points
+    include_cavity_surface: true       # Include cavity surface points
     include_protein_surface: false      # Include protein surface points
-    protein_surface_max_distance: 5.0   # Max distance for protein surface (Å)
+    protein_surface_max_distance: 3.5   # Max distance for protein surface (Å)
     
     # Process specific cavities only (null = all cavities)
     # Example: [2, 3, 5] to process only cavities KAA, KAB, KAD
@@ -67,13 +67,13 @@ default:
   # Second filter: Evaluate coordination sphere
   # Eliminates ~80-95% of distance-filtered probes
   coordination_filter:
-    coordination_radius: 3.8      # Sphere radius for counting donors (Å)
+    coordination_radius: 3.4      # Sphere radius for counting donors (Å)
     min_coordination_number: 2       # Minimum coordinating atoms
     max_coordination_number: 100       # Maximum coordinating atoms
     
     # Occlusion checking (geometric line-of-sight test)
     check_occlusion: true            # Enable occlusion testing
-    occlusion_cone_angle: 30.9       # Cone angle for occlusion (degrees)
+    occlusion_cone_angle: 32.0       # Cone angle for occlusion (degrees)
     occlusion_vdw_scale: 1.0         # VdW radius scaling factor
 
   # ==================================================
@@ -93,7 +93,7 @@ default:
   #   - Zn²⁺/Fe²⁺ (borderline): min_hard_donors: null (no requirement)
   #   - Cu⁺/Ag⁺ (soft metals): max_soft_donors: 2, max_hard_donors: 2
   hsab_filter:
-    min_hard_donors: 3            # e.g., 4 for Mg²⁺/Ca²⁺
+    min_hard_donors: 5            # e.g., 4 for Mg²⁺/Ca²⁺
     max_soft_donors: null            # e.g., 1 to avoid Cys-rich sites
     min_borderline_donors: null      # e.g., 2 for His-preference
 
@@ -104,7 +104,7 @@ default:
   # Uses hierarchical clustering with Jaccard distance
   clustering:
     selection_method: 'centroid'     # How to pick representative: 'centroid', 'first', 'random'
-    distance_threshold: 0.89          # Jaccard distance [0-1]: lower = stricter (0.3 = 70% similarity)
+    distance_threshold: 0.86          # Jaccard distance [0-1]: lower = stricter (0.3 = 70% similarity)
     min_cluster_size: 2              # Minimum cluster size to keep
 
   # ==================================================
@@ -122,7 +122,7 @@ default:
     # File formats to generate
     export_pdb: true                 # Combined PDB with protein + metal sites
     export_individual_pdbs: true     # Individual PDB files for each probe with protein
-    individual_pdb_dir: "individual_probes"  # Directory for individual PDB files
+    individual_pdb_dir: "putida_centroid_probes"  # Directory for individual PDB files
     
     # Metal atom properties in PDB files
-    metal_symbol: "M"                # 2-letter atom name for metal probes
+    metal_symbol: "MX"                # 2-letter atom name for metal probes
