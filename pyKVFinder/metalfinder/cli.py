@@ -22,6 +22,7 @@ from pyKVFinder.metalfinder import (
     DistanceFilter,
     CoordinationFilter,
     HardCoordinationFilter,
+    SphereDonorFilter,
     SignatureDeduplicator,
     run_filter_pipeline
 )
@@ -199,9 +200,11 @@ def run_metalfinder(
         print(f"  Protein surface probes: {np.sum(probes.sources == 'protein_surface')}")
         print()
     
-    # Check for centroid mode
+    # Check for centroid mode (reduces probes to one per cavity)
     use_cavity_centroids = io_config.get('use_cavity_centroids', False)
-    
+    initial_probe_count = len(probes)
+    centroid_count = None
+
     if use_cavity_centroids:
         # Validate compatibility
         if io_config.get('include_protein_surface', False):
@@ -209,18 +212,18 @@ def run_metalfinder(
                 "use_cavity_centroids=true is incompatible with include_protein_surface=true. "
                 "Protein surface points have no cavity IDs and cannot be used for centroid computation."
             )
-        
+
         if verbose:
-            print("STEP 4: Computing cavity centroids (centroid mode enabled)")
+            print("STEP 3.5: Computing cavity centroids (centroid mode enabled)")
             print("-"*70)
-        
+
         # Compute centroid for each cavity
         unique_cavity_ids = np.unique(probes.cavity_ids[probes.cavity_ids > 0])
-        
+
         if len(unique_cavity_ids) == 0:
             if verbose:
-                print("⚠ No cavities found, returning empty result")
-            final_probes = ProbeSet(
+                print("⚠ No cavities found")
+            probes = ProbeSet(
                 positions=np.array([]).reshape(0, 3),
                 sources=np.array([]),
                 cavity_ids=np.array([]),
@@ -231,12 +234,12 @@ def run_metalfinder(
             centroid_cavity_ids = []
             centroid_sources = []
             centroid_grid_indices = []
-            
+
             for cav_id in unique_cavity_ids:
                 # Get all probes for this cavity
                 mask = probes.cavity_ids == cav_id
                 cavity_probes = probes.positions[mask]
-                
+
                 # Compute centroid
                 centroid = cavity_probes.mean(axis=0)
                 centroids.append(centroid)
@@ -244,39 +247,40 @@ def run_metalfinder(
                 centroid_sources.append('cavity_interior')
                 # Use (0, 0, 0) as placeholder grid indices for centroids
                 centroid_grid_indices.append([0, 0, 0])
-                
+
                 if verbose:
                     print(f"  Cavity {cav_id}: {len(cavity_probes)} probes → centroid at ({centroid[0]:.2f}, {centroid[1]:.2f}, {centroid[2]:.2f})")
-            
-            final_probes = ProbeSet(
+
+            probes = ProbeSet(
                 positions=np.array(centroids),
                 sources=np.array(centroid_sources),
                 cavity_ids=np.array(centroid_cavity_ids),
                 grid_indices=np.array(centroid_grid_indices)
             )
-            
-            if verbose:
-                print(f"\n✓ Generated {len(final_probes)} cavity centroids")
-                print()
-        
-        all_results = []  # No filter results in centroid mode
-    else:
-        # Step 4: Configure and run filter pipeline
+
+        centroid_count = len(probes)
         if verbose:
-            print("STEP 4: Running filter pipeline")
-            print("-"*70)
-            if save_intermediates:
-                print("(Intermediate PDB files will be saved)")
+            print(f"\n✓ Reduced to {centroid_count} cavity centroids")
             print()
-        
-        # Configure filters from YAML
-        dist_config = config.get('distance_filter', {})
-        coord_config = config.get('coordination_filter', {})
-        hsab_config = config.get('hsab_filter', {})
-        cluster_config = config.get('clustering', {})
-        perf_config = config.get('performance', {})
-        
-        # Create filter instances
+
+    # Step 4: Configure and run filter pipeline
+    if verbose:
+        print("STEP 4: Running filter pipeline")
+        print("-"*70)
+        if save_intermediates:
+            print("(Intermediate PDB files will be saved)")
+        print()
+
+    # Configure filters from YAML
+    dist_config = config.get('distance_filter', {})
+    coord_config = config.get('coordination_filter', {})
+    hsab_config = config.get('hsab_filter', {})
+    cluster_config = config.get('clustering', {})
+    perf_config = config.get('performance', {})
+
+    # Create filter instances (set enabled: false in YAML to skip)
+    distance_filter = None
+    if dist_config.get('enabled', True):
         distance_filter = DistanceFilter(
             min_distance=dist_config.get('min_coordination_distance', 1.8),
             max_distance=dist_config.get('max_coordination_distance', 3.5),
@@ -284,7 +288,9 @@ def run_metalfinder(
             use_gpu=perf_config.get('use_gpu', False),
             batch_size=perf_config.get('batch_size', 10000)
         )
-        
+
+    coordination_filter = None
+    if coord_config.get('enabled', True):
         coordination_filter = CoordinationFilter(
             coordination_radius=coord_config.get('coordination_radius', 2.5),
             min_coordination=coord_config.get('min_coordination_number', 3),
@@ -295,42 +301,60 @@ def run_metalfinder(
             occlusion_cone_angle=coord_config.get('occlusion_cone_angle', 30.0),
             occlusion_vdw_scale=coord_config.get('occlusion_vdw_scale', 1.0)
         )
-        
-        # HSAB filter (only if any criteria specified)
-        hsab_filter = None
-        if (hsab_config.get('min_hard_donors') is not None or
-            hsab_config.get('max_soft_donors') is not None or
-            hsab_config.get('min_borderline_donors') is not None):
-            hsab_filter = HardCoordinationFilter(
-                min_hard_donors=hsab_config.get('min_hard_donors'),
-                max_soft_donors=hsab_config.get('max_soft_donors'),
-                min_borderline_donors=hsab_config.get('min_borderline_donors')
-            )
-        
-        # Signature deduplicator
+
+    # Sphere donor filter (independent count-in-sphere filter)
+    sd_config = config.get('sphere_donor_filter', {})
+    sphere_donor_filter = None
+    if sd_config.get('enabled', False):
+        sphere_donor_filter = SphereDonorFilter(
+            radius=sd_config['radius'],
+            donor_types=sd_config['donor_types'],
+            min_donors=sd_config.get('min_donors', 1),
+            max_donors=sd_config.get('max_donors'),
+            mode=sd_config.get('mode', 'atom'),
+            use_kdtree=perf_config.get('use_kdtree', True),
+        )
+
+    # HSAB filter (only if enabled and any criteria specified)
+    hsab_filter = None
+    if hsab_config.get('enabled', True) and (
+        hsab_config.get('min_hard_donors') is not None or
+        hsab_config.get('max_soft_donors') is not None or
+        hsab_config.get('min_borderline_donors') is not None
+    ):
+        hsab_filter = HardCoordinationFilter(
+            min_hard_donors=hsab_config.get('min_hard_donors'),
+            max_soft_donors=hsab_config.get('max_soft_donors'),
+            min_borderline_donors=hsab_config.get('min_borderline_donors')
+        )
+
+    # Signature deduplicator
+    deduplicator = None
+    if cluster_config.get('enabled', True):
         deduplicator = SignatureDeduplicator(
             selection_method=cluster_config.get('selection_method', 'centroid'),
             distance_threshold=cluster_config.get('distance_threshold', 0.3),
             min_cluster_size=cluster_config.get('min_cluster_size', 1)
         )
-        
-        # Run the pipeline
-        final_probes, all_results = run_filter_pipeline(
-            probes=probes,
-            protein_atoms=protein_atoms,
-            atom_names=atom_names,
-            atom_types=atom_types,
-            residue_names=residue_names,
-            is_backbone=is_backbone,
-            distance_filter=distance_filter,
-            coordination_filter=coordination_filter,
-            hsab_filter=hsab_filter,
-            deduplicator=deduplicator,
-            verbose=verbose,
-            save_intermediates=save_intermediates,
-            output_prefix=output_prefix,
-            protein_pdb=protein_structure_file if save_intermediates else None
-        )
+
+    # Run the pipeline
+    final_probes, all_results = run_filter_pipeline(
+        probes=probes,
+        protein_atoms=protein_atoms,
+        atom_names=atom_names,
+        atom_types=atom_types,
+        residue_names=residue_names,
+        is_backbone=is_backbone,
+        distance_filter=distance_filter,
+        coordination_filter=coordination_filter,
+        sphere_donor_filter=sphere_donor_filter,
+        hsab_filter=hsab_filter,
+        deduplicator=deduplicator,
+        verbose=verbose,
+        save_intermediates=save_intermediates,
+        output_prefix=output_prefix,
+        protein_pdb=protein_structure_file if save_intermediates else None
+    )
     
     # Step 5: Save final output
     if verbose:
@@ -368,18 +392,22 @@ def run_metalfinder(
         # Build filter names list based on what pipeline was used
         filter_names = []
         if use_cavity_centroids:
-            # Centroid mode - no filtering applied
-            filter_names.append('cavity_centroids')
-        elif all_results:
-            # Full filtering pipeline - add filter names based on which filters actually ran
-            if len(all_results) >= 1:
-                filter_names.append('distance')
-            if len(all_results) >= 2:
-                filter_names.append('coordination')
-            if len(all_results) >= 3 and hsab_filter is not None:
-                filter_names.append('hsab')
-            if len(all_results) >= 4:
-                filter_names.append('dedup')
+            filter_names.append('centroids')
+        # Map enabled filters to names in pipeline order
+        filter_name_map = []
+        if distance_filter is not None:
+            filter_name_map.append('distance')
+        if coordination_filter is not None:
+            filter_name_map.append('coordination')
+        if sphere_donor_filter is not None:
+            filter_name_map.append('sphere_donor')
+        if hsab_filter is not None:
+            filter_name_map.append('hsab')
+        if deduplicator is not None:
+            filter_name_map.append('dedup')
+        for i in range(len(all_results)):
+            if i < len(filter_name_map):
+                filter_names.append(filter_name_map[i])
         
         # Generate individual PDB files
         created_files = final_probes.to_individual_pdb_files(
@@ -415,22 +443,33 @@ def run_metalfinder(
         print("="*70)
         print("PIPELINE SUMMARY")
         print("="*70)
-        
-        if use_cavity_centroids:
-            print(f"Initial probes:              {len(probes)}")
-            print(f"Cavity centroids generated:  {len(final_probes)}")
-        else:
-            print(f"Initial probes:              {len(probes)}")
-            
-            for i, result in enumerate(all_results, 1):
-                filter_name = ["Distance", "Coordination", "HSAB", "Deduplicator"][i-1] if i <= 4 else f"Filter {i}"
-                print(f"After {filter_name:20s}: {result.metadata['n_output']:6d} "
-                      f"(rejected {result.metadata['n_rejected']:6d}, {result.metadata['rejection_rate']*100:5.1f}%)")
-            
-            print(f"\nFinal metal binding sites:   {len(final_probes)}")
-            
-            if len(probes) > 0:
-                print(f"Overall retention:           {len(final_probes)/len(probes)*100:.2f}%")
+
+        print(f"Initial probes:              {initial_probe_count}")
+        if centroid_count is not None:
+            print(f"After centroids:             {centroid_count}")
+
+        # Build filter name list matching all_results order
+        summary_filter_names = []
+        if distance_filter is not None:
+            summary_filter_names.append("Distance")
+        if coordination_filter is not None:
+            summary_filter_names.append("Coordination")
+        if sphere_donor_filter is not None:
+            summary_filter_names.append("SphereDonor")
+        if hsab_filter is not None:
+            summary_filter_names.append("HSAB")
+        if deduplicator is not None:
+            summary_filter_names.append("Deduplicator")
+
+        for i, result in enumerate(all_results):
+            name = summary_filter_names[i] if i < len(summary_filter_names) else f"Filter {i+1}"
+            print(f"After {name:20s}: {result.metadata['n_output']:6d} "
+                  f"(rejected {result.metadata['n_rejected']:6d}, {result.metadata['rejection_rate']*100:5.1f}%)")
+
+        print(f"\nFinal metal binding sites:   {len(final_probes)}")
+
+        if initial_probe_count > 0:
+            print(f"Overall retention:           {len(final_probes)/initial_probe_count*100:.2f}%")
     
     return {
         'probes': final_probes,

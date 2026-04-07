@@ -957,6 +957,165 @@ class HardCoordinationFilter(BaseFilter):
         )
 
 
+class SphereDonorFilter(BaseFilter):
+    """Count donors within a sphere around each probe and filter by count.
+
+    Independent of CoordinationFilter — performs its own KDTree ball query
+    directly on the protein atoms. Two modes:
+
+    - ``atom``: count protein atoms whose ``atom_name`` is in ``donor_types``
+      (matches ANY residue containing that atom name).
+    - ``residue_ca``: count CA atoms whose ``residue_name`` is in
+      ``donor_types``. Effectively counts *residues* of the specified types
+      via their alpha carbon as a position proxy.
+
+    Parameters
+    ----------
+    radius : float
+        Sphere radius (Angstroms).
+    donor_types : List[str]
+        In ``atom`` mode: PDB atom names (e.g., ['OD1', 'OE1', 'NZ']).
+        In ``residue_ca`` mode: 3-letter residue names (e.g., ['ASP', 'GLU']).
+    min_donors : int
+        Minimum donor count required to keep a probe.
+    max_donors : Optional[int]
+        Optional maximum donor count (inclusive).
+    mode : str
+        Either ``"atom"`` or ``"residue_ca"``. Default: ``"atom"``.
+    use_kdtree : bool
+        Use scipy cKDTree for the ball query (recommended).
+
+    Examples
+    --------
+    >>> # Count Asp/Glu carboxylate oxygens within 6 A
+    >>> f = SphereDonorFilter(
+    ...     radius=6.0,
+    ...     donor_types=['OD1', 'OD2', 'OE1', 'OE2'],
+    ...     min_donors=2,
+    ...     mode='atom',
+    ... )
+
+    >>> # Count Asp/Glu residues (by CA) within 10 A
+    >>> f = SphereDonorFilter(
+    ...     radius=10.0,
+    ...     donor_types=['ASP', 'GLU'],
+    ...     min_donors=2,
+    ...     mode='residue_ca',
+    ... )
+    """
+
+    VALID_MODES = {'atom', 'residue_ca'}
+
+    def __init__(
+        self,
+        radius: float,
+        donor_types: List[str],
+        min_donors: int,
+        max_donors: Optional[int] = None,
+        mode: str = 'atom',
+        use_kdtree: bool = True,
+    ):
+        if radius <= 0:
+            raise ValueError(f"radius must be > 0, got {radius}")
+        if not donor_types:
+            raise ValueError("donor_types must be non-empty")
+        if mode not in self.VALID_MODES:
+            raise ValueError(
+                f"mode must be one of {self.VALID_MODES}, got {mode!r}"
+            )
+        if max_donors is not None and max_donors < min_donors:
+            raise ValueError(
+                f"max_donors ({max_donors}) must be >= min_donors ({min_donors})"
+            )
+
+        self.radius = float(radius)
+        self.donor_types = {str(s).upper() for s in donor_types}
+        self.min_donors = int(min_donors)
+        self.max_donors = max_donors if max_donors is None else int(max_donors)
+        self.mode = mode
+        self.use_kdtree = use_kdtree
+
+    def filter(
+        self,
+        probes: ProbeSet,
+        protein_atoms: np.ndarray,
+        atom_names: np.ndarray,
+        residue_names: np.ndarray,
+        **kwargs,
+    ) -> FilterResult:
+        """Apply sphere donor filter to probe set.
+
+        Parameters
+        ----------
+        probes : ProbeSet
+            Input probes.
+        protein_atoms : np.ndarray, shape (M, 3)
+            Protein atom coordinates.
+        atom_names : np.ndarray, shape (M,)
+            PDB atom names.
+        residue_names : np.ndarray, shape (M,)
+            3-letter residue names.
+        """
+        n_input = len(probes)
+
+        # Build candidate-atom mask
+        atom_names_upper = np.array([str(a).upper() for a in atom_names])
+        residue_names_upper = np.array([str(r).upper() for r in residue_names])
+
+        if self.mode == 'atom':
+            cand_mask = np.isin(atom_names_upper, list(self.donor_types))
+        else:  # residue_ca
+            cand_mask = (atom_names_upper == 'CA') & np.isin(
+                residue_names_upper, list(self.donor_types)
+            )
+
+        cand_coords = protein_atoms[cand_mask]
+        n_candidate_atoms = int(cand_mask.sum())
+
+        if n_candidate_atoms == 0:
+            print(
+                f"  Warning: SphereDonorFilter found 0 candidate atoms "
+                f"(mode={self.mode}, donor_types={sorted(self.donor_types)})"
+            )
+            counts = np.zeros(n_input, dtype=int)
+        elif n_input == 0:
+            counts = np.zeros(0, dtype=int)
+        elif self.use_kdtree:
+            tree = cKDTree(cand_coords)
+            neighbor_lists = tree.query_ball_point(probes.positions, r=self.radius)
+            counts = np.array([len(nbrs) for nbrs in neighbor_lists], dtype=int)
+        else:
+            counts = np.empty(n_input, dtype=int)
+            for i, p in enumerate(probes.positions):
+                d = np.linalg.norm(cand_coords - p, axis=1)
+                counts[i] = int(np.sum(d <= self.radius))
+
+        # Apply constraints
+        mask = counts >= self.min_donors
+        if self.max_donors is not None:
+            mask &= counts <= self.max_donors
+
+        filtered = probes.filter_by_mask(mask)
+
+        metadata = {
+            'n_input': n_input,
+            'n_output': len(filtered),
+            'n_rejected': n_input - len(filtered),
+            'rejection_rate': (
+                1.0 - (len(filtered) / n_input) if n_input > 0 else 0.0
+            ),
+            'donor_counts': counts,
+            'radius': self.radius,
+            'mode': self.mode,
+            'donor_types': sorted(self.donor_types),
+            'min_donors': self.min_donors,
+            'max_donors': self.max_donors,
+            'n_candidate_atoms': n_candidate_atoms,
+        }
+
+        return FilterResult(probes=filtered, mask=mask, metadata=metadata)
+
+
 @dataclass
 class CoordinationSignature:
     """Immutable coordination signature for deduplication.
@@ -1331,6 +1490,7 @@ def run_filter_pipeline(
     is_backbone: np.ndarray,
     distance_filter: Optional[DistanceFilter] = None,
     coordination_filter: Optional[CoordinationFilter] = None,
+    sphere_donor_filter: Optional[SphereDonorFilter] = None,
     hsab_filter: Optional[HardCoordinationFilter] = None,
     deduplicator: Optional[SignatureDeduplicator] = None,
     verbose: bool = True,
@@ -1476,7 +1636,45 @@ def run_filter_pipeline(
             if verbose:
                 print(f"  Saving: {filename}")
             current_probes.to_pdb_with_protein(filename, protein_pdb)
-    
+
+    # Stage 2.5: Sphere donor filter (independent of coordination_infos)
+    if sphere_donor_filter is not None and len(current_probes) > 0:
+        stage_num += 1
+        if verbose:
+            print(f"\nFilter {stage_num}: Sphere Donor Filter")
+            print("-"*70)
+
+        result = sphere_donor_filter.filter(
+            current_probes,
+            protein_atoms=protein_atoms,
+            atom_names=atom_names,
+            residue_names=residue_names,
+        )
+        results.append(result)
+        current_probes = result.probes
+
+        # Re-slice coordination_infos so downstream HSAB/dedup stay in sync
+        if coordination_infos is not None:
+            passed_indices = np.where(result.mask)[0]
+            coordination_infos = [coordination_infos[i] for i in passed_indices]
+
+        if verbose:
+            print(f"  Input: {result.metadata['n_input']} probes")
+            print(f"  Output: {result.metadata['n_output']} probes")
+            print(f"  Rejected: {result.metadata['n_rejected']} probes ({result.metadata['rejection_rate']*100:.1f}%)")
+            print(f"  Candidate atoms in structure: {result.metadata['n_candidate_atoms']}")
+
+        if save_intermediates and len(current_probes) > 0:
+            filename = f"{output_prefix}_{stage_num:02d}_sphere_donor.pdb"
+            if verbose:
+                print(f"  Saving: {filename}")
+            current_probes.to_pdb_with_protein(filename, protein_pdb)
+    elif sphere_donor_filter is not None and len(current_probes) == 0:
+        if verbose:
+            print(f"\nFilter {stage_num + 1}: Sphere Donor Filter")
+            print("-"*70)
+            print(f"  Skipping: no probes remaining from previous filter")
+
     # Stage 3: HSAB filter
     if hsab_filter is not None and len(current_probes) > 0:
         stage_num += 1

@@ -1,0 +1,58 @@
+default:
+  kvfinder:
+    step: 0.6
+    probe_in: 1.4
+    probe_out: 4.0
+    removal_distance: 2.4
+    volume_cutoff: 5.0
+  io:
+    include_cavities: true
+    include_cavity_surface: false
+    include_protein_surface: false
+    protein_surface_max_distance: 3.5
+    cavity_ids: null
+    use_cavity_centroids: true
+  distance_filter:
+    enabled: false
+    min_coordination_distance: 1.8
+    max_coordination_distance: 3.5
+    allowed_donor_atoms:
+    - N
+    - O
+    - S
+  coordination_filter:
+    enabled: false
+    coordination_radius: 3.4
+    min_coordination_number: 2
+    max_coordination_number: 100
+    check_occlusion: true
+    occlusion_cone_angle: 32.0
+    occlusion_vdw_scale: 1.0
+  hsab_filter:
+    enabled: false
+    min_hard_donors: 5
+    max_soft_donors: null
+    min_borderline_donors: null
+  sphere_donor_filter:
+    enabled: true
+    mode: residue_ca
+    radius: 9.918302722751982
+    min_donors: 2
+    max_donors: null
+    donor_types:
+    - ASP
+    - GLU
+  clustering:
+    enabled: false
+    selection_method: centroid
+    distance_threshold: 0.86
+    min_cluster_size: 2
+  performance:
+    use_kdtree: true
+    use_gpu: false
+    batch_size: 10000
+  output:
+    export_pdb: false
+    export_individual_pdbs: false
+    individual_pdb_dir: ped_cluster_probe_centroids_individual
+    metal_symbol: LA

@@ -1,0 +1,6 @@
+python optimize_centroid_filters.py --n-trials 100 --config metal_config.yaml \
+    --gt-mode atom --gt-donor-types OD1 OD2 OE1 OE2 OG OG1 OH \
+    --gt-radius 4.0 \
+    --filter-mode residue_ca --filter-donor-types ASP GLU \
+    --min-donors-gt 5 \
+    --recall-penalty 1.0

@@ -37,7 +37,7 @@ default:
   io:
     # Which KVFinder outputs to use as initial probe positions
     include_cavities: true              # Include cavity interior points
-    include_cavity_surface: true       # Include cavity surface points
+    include_cavity_surface: false       # Include cavity surface points
     include_protein_surface: false      # Include protein surface points
     protein_surface_max_distance: 3.5   # Max distance for protein surface (Å)
     
@@ -45,9 +45,11 @@ default:
     # Example: [2, 3, 5] to process only cavities KAA, KAB, KAD
     cavity_ids: null
     
-    # Centroid mode: output cavity centroids instead of running filter pipeline
+    # Centroid mode: reduce probes to one per cavity before filtering
     # Incompatible with include_protein_surface=true (protein surface has no cavity IDs)
-    use_cavity_centroids: true         # If true, skip filtering and output cavity centroids
+    # To reproduce legacy centroid-only behavior (no filtering), also set
+    # enabled: false on all filter sections below.
+    use_cavity_centroids: true
 
   # ==================================================
   # DISTANCE FILTER
@@ -55,6 +57,7 @@ default:
   # First filter: Remove probes based on distance to nearest protein atom
   # Eliminates ~70-90% of initial probes
   distance_filter:
+    enabled: false                   # Set to false to skip this filter
     min_coordination_distance: 1.8  # Minimum metal-ligand distance (Å)
     max_coordination_distance: 3.5  # Maximum metal-ligand distance (Å)
     
@@ -67,6 +70,7 @@ default:
   # Second filter: Evaluate coordination sphere
   # Eliminates ~80-95% of distance-filtered probes
   coordination_filter:
+    enabled: false                    # Set to false to skip this filter
     coordination_radius: 3.4      # Sphere radius for counting donors (Å)
     min_coordination_number: 2       # Minimum coordinating atoms
     max_coordination_number: 100       # Maximum coordinating atoms
@@ -93,9 +97,44 @@ default:
   #   - Zn²⁺/Fe²⁺ (borderline): min_hard_donors: null (no requirement)
   #   - Cu⁺/Ag⁺ (soft metals): max_soft_donors: 2, max_hard_donors: 2
   hsab_filter:
+    enabled: false                    # Set to false to skip this filter
     min_hard_donors: 5            # e.g., 4 for Mg²⁺/Ca²⁺
     max_soft_donors: null            # e.g., 1 to avoid Cys-rich sites
     min_borderline_donors: null      # e.g., 2 for His-preference
+
+  # ==================================================
+  # SPHERE DONOR FILTER
+  # ==================================================
+  # Configurable "count donors in a sphere" filter. Independent of
+  # coordination_filter — does its own KDTree ball query. Can be used as
+  # the ONLY donor-counting filter (e.g., with coordination_filter disabled).
+  #
+  # Modes:
+  #   atom       - donor_types is a list of PDB atom names; counts matching
+  #                atoms within radius.
+  #   residue_ca - donor_types is a list of residue names; counts CA atoms
+  #                of matching residues within radius (counts residues via
+  #                their alpha carbon, not individual atoms).
+  #
+  # Examples:
+  #   Carboxylate/hydroxyl/amine (atom mode):
+  #     mode: atom
+  #     donor_types: [OD1, OD2, OE1, OE2, OG, OG1, OH, NZ, O]
+  #
+  #   Asp/Glu residues (residue_ca mode):
+  #     mode: residue_ca
+  #     donor_types: [ASP, GLU]
+  sphere_donor_filter:
+    enabled: false
+    mode: residue_ca              # 'atom' or 'residue_ca'
+    radius: 8.0                    # sphere radius (A)
+    min_donors: 2                  # minimum donors within the sphere
+    max_donors: null
+    donor_types:                   # residue names (residue_ca mode)
+      - ASP
+      - GLU
+    # For atom mode, example donor_types:
+    # donor_types: [OD1, OD2, OE1, OE2, OG, OG1, OH, NZ, O]
 
   # ==================================================
   # DEDUPLICATION / CLUSTERING
@@ -103,6 +142,7 @@ default:
   # Fourth filter: Remove duplicate sites with similar coordination signatures
   # Uses hierarchical clustering with Jaccard distance
   clustering:
+    enabled: false                    # Set to false to skip deduplication
     selection_method: 'centroid'     # How to pick representative: 'centroid', 'first', 'random'
     distance_threshold: 0.86          # Jaccard distance [0-1]: lower = stricter (0.3 = 70% similarity)
     min_cluster_size: 2              # Minimum cluster size to keep
@@ -122,7 +162,7 @@ default:
     # File formats to generate
     export_pdb: true                 # Combined PDB with protein + metal sites
     export_individual_pdbs: true     # Individual PDB files for each probe with protein
-    individual_pdb_dir: "putida_centroid_probes"  # Directory for individual PDB files
+    individual_pdb_dir: "ped_cluster_probe_centroids_individual"  # Directory for individual PDB files
     
     # Metal atom properties in PDB files
-    metal_symbol: "MX"                # 2-letter atom name for metal probes
+    metal_symbol: "LA"                # 2-letter atom name for metal probes
